@@ -9,6 +9,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.drawing.image import Image as ExcelImage
 from PIL import Image as PILImage
 import pytesseract # Motor de leitura de imagens (OCR)
+pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 # --- 1. CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="Gerador de Relatório Fotográfico", page_icon="📸", layout="wide")
