@@ -1,33 +1,25 @@
 import streamlit as st
 import pdfplumber
-import fitz  # PyMuPDF para extrair imagens
+import fitz  # PyMuPDF
 import pandas as pd
 import re
 import io
 from openpyxl import Workbook
-from openpyxl.styles import Alignment
+from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.drawing.image import Image as ExcelImage
+from PIL import Image as PILImage
+import pytesseract
 
-# 1. Configuração da Página
-st.set_page_config(page_title="Gerador de Relatório Fotográfico", layout="wide", page_icon="📸")
+# 1. Configuração da Página Streamlit
+st.set_page_config(page_title="Gerador de Relatório TRO", page_icon="🛣️", layout="wide")
+st.title("🛣️ Gerador de TRO (Conserva)")
+st.markdown("Cole o texto e anexe as fotos ou PDFs. O sistema montará a planilha mesclada com as imagens correspondentes.")
 
-st.title("📸 BOT TRO (Conserva)")
-st.markdown("Extraia os dados dos PDFs base e combine automaticamente com as fotos do TRO.")
-
-# 2. Interface de Upload e Texto
-col1, col2 = st.columns(2)
-
-with col1:
-    uploader_dados = st.file_uploader("1. PDFs de Dados (Base)", type=['pdf'], accept_multiple_files=True)
-    caixa_texto = st.text_area("2. Ou cole o texto base aqui...", height=150)
-
-with col2:
-    uploader_tro = st.file_uploader("3. Opcional: PDF TRO (Fotos)", type=['pdf'], accept_multiple_files=False)
-
-# 3. Padrão Regex (Mantido igual)
+# 2. Padrões Regex
 padrao_base = r"([A-Z]{2}-\d{3}-[A-Z]{2})\s+(.*?)\s+(Sentido\s+(?:Crescente|Decrescente))\s*-\s*([\d,]+)\s+([\d,]+)"
+padrao_km_solto = r"(\d{1,4}[.,]\d{1,3})"
 
-def extrair_padrao(texto_cru):
+def extrair_padrao_texto(texto_cru):
     dados = []
     if texto_cru:
         texto_limpo = re.sub(r'\s+', ' ', texto_cru)
@@ -35,137 +27,158 @@ def extrair_padrao(texto_cru):
         for match in encontros:
             km_inicial = match.group(4)
             texto_formatado = f"{match.group(1)} {match.group(2).strip()} {match.group(3)} - {km_inicial} {match.group(5)}"
-            # Guarda o KM inicial limpo (ex: "758.700" ou "758,70") para facilitar a busca
             km_chave = km_inicial.replace(',', '.') 
             dados.append({"texto": texto_formatado, "km_chave": km_chave})
     return dados
 
-# 4. Função para extrair imagens do TRO
-def extrair_imagens_tro(conteudo_pdf_bytes):
-    mapa_imagens = {}
-    doc = fitz.open(stream=conteudo_pdf_bytes, filetype="pdf")
-    
-    for pagina in doc:
-        lista_imagens = pagina.get_images(full=True)
-        dicionario_texto = pagina.get_text("dict")
+def mapear_fotos(arquivos_upload):
+    mapa_arquivos = {}
+    for arquivo in arquivos_upload:
+        nome_arquivo = arquivo.name
+        conteudo = arquivo.read() # No Streamlit, basta dar .read() para pegar os bytes
+        extensao = nome_arquivo.split('.')[-1].lower()
         
-        for img_info in lista_imagens:
-            xref = img_info[0]
-            imagem_bytes = doc.extract_image(xref)["image"]
-            
-            blocos = dicionario_texto.get("blocks", [])
+        km_no_titulo = re.search(padrao_km_solto, nome_arquivo)
+        
+        # Processamento de PDF
+        if extensao == 'pdf':
+            doc = fitz.open(stream=conteudo, filetype="pdf")
+            for pagina in doc:
+                texto_pdf = pagina.get_text()
+                km_encontrado = None
+                
+                match_texto = re.search(padrao_km_solto, texto_pdf)
+                if match_texto:
+                    km_encontrado = match_texto.group(1).replace(',', '.')
+                elif km_no_titulo:
+                    km_encontrado = km_no_titulo.group(1).replace(',', '.')
+                
+                imagens = pagina.get_images(full=True)
+                if imagens and km_encontrado:
+                    xref = imagens[0][0]
+                    imagem_bytes = doc.extract_image(xref)["image"]
+                    mapa_arquivos[km_encontrado] = imagem_bytes
+
+        # Processamento de Imagens (JPG, PNG)
+        elif extensao in ['jpg', 'jpeg', 'png']:
             km_encontrado = None
-            
-            for bloco in blocos:
-                if "lines" in bloco:
-                    for linha in bloco["lines"]:
-                        for span in linha["spans"]:
-                            texto = span["text"].strip()
-                            # Tenta identificar número com vírgula (ex: 758,70)
-                            if re.match(r"^\d{1,4},\d{1,3}$", texto): 
-                                km_encontrado = texto.replace(',', '.')
-                                break
-                        if km_encontrado: break
-                if km_encontrado: break
+            if km_no_titulo:
+                km_encontrado = km_no_titulo.group(1).replace(',', '.')
+            else:
+                try:
+                    img_pil = PILImage.open(io.BytesIO(conteudo))
+                    texto_imagem = pytesseract.image_to_string(img_pil)
+                    match_ocr = re.search(padrao_km_solto, texto_imagem)
+                    if match_ocr:
+                        km_encontrado = match_ocr.group(1).replace(',', '.')
+                except Exception:
+                    pass
             
             if km_encontrado:
-                mapa_imagens[km_encontrado] = imagem_bytes
+                mapa_arquivos[km_encontrado] = conteudo
                 
-    return mapa_imagens
+    return mapa_arquivos
 
-# 5. Processamento e Criação do Excel
-st.divider()
+# 3. Interface do Usuário (Inputs)
+texto_base = st.text_area("📝 Texto Base (Cole aqui os KMs):", height=150)
 
-if st.button("4. Gerar Planilha Completa", type="primary", use_container_width=True):
-    with st.spinner("Iniciando a automação... Processando textos e procurando fotos..."):
-        
-        registros = []
-        mapa_fotos = {}
-        
-        # A. Processar Texto Base
-        if caixa_texto.strip():
-            registros.extend(extrair_padrao(caixa_texto.strip()))
-            
-        # B. Processar PDFs Base
-        if uploader_dados:
-            for arquivo in uploader_dados:
-                # O Streamlit devolve os ficheiros como objetos que precisam de ser lidos
-                with pdfplumber.open(io.BytesIO(arquivo.read())) as pdf:
-                    for pagina in pdf.pages:
-                        texto_pagina = pagina.extract_text()
-                        if texto_pagina:
-                            registros.extend(extrair_padrao(texto_pagina))
-        
-        # C. Processar o PDF com as Fotos (TRO)
-        if uploader_tro:
-            mapa_fotos = extrair_imagens_tro(uploader_tro.read())
-            st.success(f"📸 Fantástico! Foram encontradas e recortadas {len(mapa_fotos)} fotos no arquivo TRO.")
+col1, col2 = st.columns(2)
+with col1:
+    arquivos_antes = st.file_uploader("📸 Fotos ANTES (PDF, JPG, PNG)", accept_multiple_files=True, type=['pdf', 'jpg', 'jpeg', 'png'])
+with col2:
+    arquivos_depois = st.file_uploader("📸 Fotos DEPOIS (PDF, JPG, PNG)", accept_multiple_files=True, type=['pdf', 'jpg', 'jpeg', 'png'])
 
-        # 6. Construir o Excel
-        if registros:
-            wb = Workbook()
-            ws = wb.active
-            ws.title = "Relatório Fotográfico"
+# 4. Botão de Ação e Processamento
+if st.button("🚀 Gerar Planilha Completa", use_container_width=True):
+    if not texto_base.strip():
+        st.warning("⚠️ Por favor, cole o texto base antes de processar.")
+    else:
+        with st.spinner("🔍 Analisando dados e varrendo arquivos em busca de fotos..."):
+            registros = extrair_padrao_texto(texto_base)
             
-            ws.column_dimensions['A'].width = 5
-            ws.column_dimensions['B'].width = 45
-            ws.column_dimensions['C'].width = 45
-            ws.column_dimensions['D'].width = 5
+            mapa_antes = mapear_fotos(arquivos_antes) if arquivos_antes else {}
+            mapa_depois = mapear_fotos(arquivos_depois) if arquivos_depois else {}
             
-            linha_excel = 1 
-            fotos_inseridas = 0
-            
-            for reg in registros:
-                texto_final = reg['texto']
-                km_buscado = reg['km_chave']
+            st.info(f"Encontrados {len(mapa_antes)} KMs nas fotos 'ANTES' e {len(mapa_depois)} KMs nas fotos 'DEPOIS'.")
+
+            if registros:
+                wb = Workbook()
+                ws = wb.active
+                ws.title = "Relatório Fotográfico"
                 
-                # --- LINHA DA FOTO ---
-                ws.row_dimensions[linha_excel].height = 150
+                # Configuração de Colunas
+                ws.column_dimensions['A'].width = 5
+                ws.column_dimensions['B'].width = 45 
+                ws.column_dimensions['C'].width = 45 
+                ws.column_dimensions['D'].width = 5
                 
-                foto_bytes = None
-                for km_tro, img_data in mapa_fotos.items():
-                    if km_tro in km_buscado or km_buscado.startswith(km_tro):
-                        foto_bytes = img_data
-                        break
+                # Cabeçalho
+                ws.merge_cells('B1:C1')
+                ws['B1'] = "RELATÓRIO DE EXECUÇÃO"
+                ws['B1'].alignment = Alignment(horizontal='center', vertical='center')
+                ws['B1'].font = Font(bold=True, color="FFFFFF")
+                ws['B1'].fill = PatternFill(start_color="002060", end_color="002060", fill_type="solid")
                 
-                if foto_bytes:
-                    imagem_io = io.BytesIO(foto_bytes)
-                    img_excel = ExcelImage(imagem_io)
-                    img_excel.height = 180 
-                    img_excel.width = 300
+                ws['B2'] = "Foto(s) do Local Antes / Durante a Execução"
+                ws['C2'] = "Foto(s) do Local Após a Execução"
+                for celula in ['B2', 'C2']:
+                    ws[celula].alignment = Alignment(horizontal='center', vertical='center')
+                    ws[celula].font = Font(bold=True)
+                    ws[celula].fill = PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type="solid")
+                
+                linha_excel = 3
+                fotos_coladas = 0
+                
+                for reg in registros:
+                    texto_final = reg['texto']
+                    km_buscado = reg['km_chave']
                     
-                    posicao = f"B{linha_excel}"
-                    ws.add_image(img_excel, posicao)
-                    fotos_inseridas += 1
-                else:
-                    celula_b = ws.cell(row=linha_excel, column=2)
-                    celula_b.value = "FOTO NÃO ENCONTRADA"
-                    celula_b.alignment = Alignment(horizontal='center', vertical='center')
+                    ws.row_dimensions[linha_excel].height = 150
+                    
+                    foto_antes_bytes = next((img for km, img in mapa_antes.items() if km in km_buscado or km_buscado.startswith(km)), None)
+                    foto_depois_bytes = next((img for km, img in mapa_depois.items() if km in km_buscado or km_buscado.startswith(km)), None)
+                    
+                    # Colar Foto Antes
+                    if foto_antes_bytes:
+                        img_excel = ExcelImage(io.BytesIO(foto_antes_bytes))
+                        img_excel.height, img_excel.width = 180, 300
+                        ws.add_image(img_excel, f"B{linha_excel}")
+                        fotos_coladas += 1
+                    else:
+                        ws[f"B{linha_excel}"] = "[ SEM FOTO ANTES ]"
+                        ws[f"B{linha_excel}"].alignment = Alignment(horizontal='center', vertical='center')
 
-                # --- LINHA DO TEXTO ---
-                linha_texto_excel = linha_excel + 1
-                ws.row_dimensions[linha_texto_excel].height = 11.25
-                ws.merge_cells(start_row=linha_texto_excel, start_column=2, end_row=linha_texto_excel, end_column=3)
-                celula_texto = ws.cell(row=linha_texto_excel, column=2)
-                celula_texto.value = texto_final
-                celula_texto.alignment = Alignment(horizontal='center', vertical='center')
+                    # Colar Foto Depois
+                    if foto_depois_bytes:
+                        img_excel = ExcelImage(io.BytesIO(foto_depois_bytes))
+                        img_excel.height, img_excel.width = 180, 300
+                        ws.add_image(img_excel, f"C{linha_excel}")
+                        fotos_coladas += 1
+                    else:
+                        ws[f"C{linha_excel}"] = "[ SEM FOTO DEPOIS ]"
+                        ws[f"C{linha_excel}"].alignment = Alignment(horizontal='center', vertical='center')
+
+                    # Linha do Texto (Mesclada)
+                    linha_texto_excel = linha_excel + 1
+                    ws.row_dimensions[linha_texto_excel].height = 11.25
+                    ws.merge_cells(start_row=linha_texto_excel, start_column=2, end_row=linha_texto_excel, end_column=3)
+                    ws.cell(row=linha_texto_excel, column=2, value=texto_final).alignment = Alignment(horizontal='center', vertical='center')
+                    
+                    linha_excel += 2
                 
-                linha_excel += 2
-            
-            # 7. Disponibilizar o Botão de Download
-            excel_buffer = io.BytesIO()
-            wb.save(excel_buffer)
-            excel_buffer.seek(0)
-            
-            st.success(f"✅ Feito! **{len(registros)}** linhas criadas e **{fotos_inseridas}** fotos coladas com sucesso.")
-            
-            st.download_button(
-                label="📥 Baixar Planilha Final (Com Fotos)",
-                data=excel_buffer,
-                file_name="Relatorio_Com_Fotos.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                type="primary"
-            )
-            
-        else:
-            st.error("⚠️ Nenhum dado de rodovia foi encontrado no texto ou nos PDFs base fornecidos.")
+                # Gerar arquivo para download
+                excel_buffer = io.BytesIO()
+                wb.save(excel_buffer)
+                
+                st.success(f"✅ {len(registros)} blocos criados | 📸 {fotos_coladas} fotos correspondentes encaixadas!")
+                
+                # Botão Nativo de Download do Streamlit
+                st.download_button(
+                    label="📥 Baixar Relatório Final em Excel",
+                    data=excel_buffer.getvalue(),
+                    file_name="Relatorio_Antes_Depois.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+            else:
+                st.error("⚠️ Nenhum KM válido foi encontrado no texto base.")
