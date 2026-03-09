@@ -11,7 +11,7 @@ from openpyxl.drawing.image import Image as ExcelImage
 # 1. Configuração da Página
 st.set_page_config(page_title="Gerador de Relatório Fotográfico", layout="wide", page_icon="📸")
 
-st.title("📸 Gerador de Relatório Fotográfico Automático")
+st.title("📸 BOT TRO (Conserva)")
 st.markdown("Extraia os dados dos PDFs base e combine automaticamente com as fotos do TRO.")
 
 # 2. Interface de Upload e Texto
