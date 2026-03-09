@@ -80,13 +80,13 @@ def mapear_fotos(arquivos_upload):
                 
     return mapa_arquivos
 
-texto_base = st.text_area("📝 Texto Base (Cole aqui os KMs):", height=150)
+texto_base = st.text_area("📝 Cole o texto base aqui):", height=150)
 
 col1, col2 = st.columns(2)
 with col1:
-    arquivos_antes = st.file_uploader("📸 Fotos ANTES (PDF, JPG, PNG)", accept_multiple_files=True, type=['pdf', 'jpg', 'jpeg', 'png'])
+    arquivos_antes = st.file_uploader("📸 Anexar Fotos - ANTES (PDF, JPG, PNG)", accept_multiple_files=True, type=['pdf', 'jpg', 'jpeg', 'png'])
 with col2:
-    arquivos_depois = st.file_uploader("📸 Fotos DEPOIS (PDF, JPG, PNG)", accept_multiple_files=True, type=['pdf', 'jpg', 'jpeg', 'png'])
+    arquivos_depois = st.file_uploader("📸 Anexar Fotos - DEPOIS (PDF, JPG, PNG)", accept_multiple_files=True, type=['pdf', 'jpg', 'jpeg', 'png'])
 
 if st.button("🚀 Gerar Planilha Completa", use_container_width=True):
     if not texto_base.strip():
