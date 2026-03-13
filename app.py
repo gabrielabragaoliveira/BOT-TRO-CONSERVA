@@ -17,7 +17,7 @@ if os.path.exists(caminho_tesseract_win):
     pytesseract.pytesseract.tesseract_cmd = caminho_tesseract_win
 
 st.set_page_config(page_title="Gerador de Relatório TRO", page_icon="📸", layout="wide")
-st.title("📸 Gerador Automático de Relatório (Antes e Depois)")
+st.title("📸 Gerador de Relatório TRO")
 
 # --- 2. PADRÕES REGEX ---
 # Atualizado para ignorar espaços acidentais em volta do + ou vírgula
